@@ -67,3 +67,16 @@ ULTRA IMPORTANT:
 - ULTRA IMPORTANT you NEVER!!! add ``` at the start or end of the file meaning you never add anything that is not the code at the start or end of the file.
 - Never change imports or function definitions unless explicitly instructed
 - If you spot potential issues in the instructions, fix them!"""
+
+added_files = []
+stored_searches = {}
+file_templates = {
+    "python": "def main():\n    pass\n\nif __name__ == \"__main__\":\n    main()",
+    "html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Document</title>\n</head>\n<body>\n    \n</body>\n</html>",
+    "javascript": "// Your JavaScript code here"
+}
+undo_history = {}
+stored_images = {}
+command_history = FileHistory('.aiconsole_history.txt')
+commands = WordCompleter(['/add', '/edit', '/new', '/search', '/image', '/clear', '/reset', '/diff', '/history', '/save', '/load', '/undo', '/help', '/model', '/change_model', '/show', 'exit'], ignore_case=True)
+session = PromptSession(history=command_history)
