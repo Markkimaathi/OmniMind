@@ -248,3 +248,86 @@ def write_file_content(filepath, content):
         return True
     except IOError:
         return False
+    
+def is_text_file(file_path, sample_size=8192, text_characters=set(bytes(range(32,127)) + b'\n\r\t\b')):
+    """Determine whether a file is text or binary."""
+    try:
+        with open(file_path, 'rb') as f:
+            chunk = f.read(sample_size)
+
+        if not chunk:  # Empty files are considered text
+            return True
+
+        if b'\x00' in chunk:  # Null bytes usually indicate binary
+            return False
+
+        # If >30% of chars are non-text, probably binary
+        text_chars = sum(byte in text_characters for byte in chunk)
+        return text_chars / len(chunk) > 0.7
+
+    except IOError:
+        return False
+
+async def handle_add_command(chat_history, *paths):
+    global added_files
+    contents = []
+    new_context = ""
+
+    for path in paths:
+        if os.path.isfile(path):  # File handling
+            content = read_file_content(path)
+            if not content.startswith("❌"):
+                contents.append((path, content))
+                added_files.append(path)
+
+        elif os.path.isdir(path):  # Directory handling
+            print_colored(f"📁 Processing folder: {path}", Fore.CYAN)
+            for item in os.listdir(path):
+                item_path = os.path.join(path, item)
+                if os.path.isfile(item_path) and is_text_file(item_path):
+                    content = read_file_content(item_path)
+                    if not content.startswith("❌"):
+                        contents.append((item_path, content))
+                        added_files.append(item_path)
+
+        else:
+            print_colored(f"❌ '{path}' is neither a valid file nor folder.", Fore.RED)
+
+    if contents:
+        for fp, content in contents:
+            new_context += f"""The following file has been added: {fp}:
+\n{content}\n\n"""
+
+        chat_history.append({"role": "user", "content": new_context})
+        print_colored(f"✅ Added {len(contents)} files to knowledge!", Fore.GREEN)
+    else:
+        print_colored("❌ No valid files were added to knowledge.", Fore.YELLOW)
+
+    return chat_history
+
+async def handle_edit_command(default_chat_history, editor_chat_history, filepaths):
+    all_contents = [read_file_content(fp) for fp in filepaths]
+    valid_files, valid_contents = [], []
+
+    for filepath, content in zip(filepaths, all_contents):
+        if content.startswith("❌"):
+            print_colored(content, Fore.RED)
+        else:
+            valid_files.append(filepath)
+            valid_contents.append(content)
+
+    if not valid_files:
+        print_colored("❌ No valid files to edit.", Fore.YELLOW)
+        return default_chat_history, editor_chat_history
+
+    user_request = await get_input_async(f"What would you like to change in {', '.join(valid_files)}?")
+
+    instructions_prompt = "For these files:\n"
+    instructions_prompt += "\n".join([f"File: {fp}\n```\n{content}\n```\n" for fp, content in zip(valid_files, valid_contents)])
+    instructions_prompt += f"User wants: {user_request}\nProvide LINE-BY-LINE edit instructions for ALL files. Number each instruction and specify which file it applies to.\n"
+
+    default_chat_history.append({"role": "user", "content": instructions_prompt})
+    default_instructions = get_streaming_response(default_chat_history, DEFAULT_MODEL)
+    default_chat_history.append({"role": "assistant", "content": default_instructions})
+
+    print_colored("\n" + "=" * 50, Fore.MAGENTA)
