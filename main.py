@@ -204,3 +204,47 @@ async def handle_image_command(filepaths_or_urls, default_chat_history):
     print_colored(f"🖼️ {processed_images} images processed. {success_images} added successfully. {len(stored_images)} total images in memory!", Fore.CYAN)
 
     return default_chat_history
+
+async def aget_results(word):
+    results = await AsyncDDGS(proxy=None).atext(word, max_results=100)
+    return results
+
+def clear_console():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def print_colored(text, color=Fore.WHITE, style=Style.NORMAL, end='\n'):
+    print(f"{style}{color}{text}{Style.RESET_ALL}", end=end)
+
+def get_streaming_response(messages, model):
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+        )
+        full_response = ""
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                print_colored(chunk.choices[0].delta.content, end="")
+                full_response += chunk.choices[0].delta.content
+        return full_response.strip()
+    except Exception as e:
+        print_colored(f"Error in streaming response: {e}", Fore.RED)
+        return ""
+
+def read_file_content(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8') as file:
+            return file.read()
+    except FileNotFoundError:
+        return f"❌ Error: File not found: {filepath}"
+    except IOError as e:
+        return f"❌ Error reading {filepath}: {e}"
+
+def write_file_content(filepath, content):
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return True
+    except IOError:
+        return False
