@@ -331,3 +331,191 @@ async def handle_edit_command(default_chat_history, editor_chat_history, filepat
     default_chat_history.append({"role": "assistant", "content": default_instructions})
 
     print_colored("\n" + "=" * 50, Fore.MAGENTA)
+
+    for idx, (filepath, content) in enumerate(zip(valid_files, valid_contents), 1):
+        try:
+            print_colored(f"📝 EDITING {filepath} ({idx}/{len(valid_files)}):", Fore.BLUE)
+
+            edit_message = f"""
+            Original code:
+
+            {content}
+
+            Instructions: {default_instructions}
+
+            Follow only instructions applicable to {filepath}. Output ONLY the new code. No explanations. DO NOT ADD ANYTHING ELSE. no type of file at the beginning of the file like ```python etq. no ``` at the end of the file.
+            """
+
+            editor_chat_history.append({"role": "user", "content": edit_message})
+
+            current_content = read_file_content(filepath)  # Read fresh
+            if current_content.startswith("❌"):
+                return default_chat_history, editor_chat_history
+
+            lines = current_content.split('\n')
+            buffer = ""
+            edited_lines = lines.copy()  # Create a copy to store edited lines
+            line_index = 0
+
+            for chunk in client.chat.completions.create(
+                model=EDITOR_MODEL,
+                messages=editor_chat_history,
+                stream=True,
+            ):
+                if chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    print_colored(content, end="")
+                    buffer += content
+
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        if line_index < len(edited_lines):
+                            edited_lines[line_index] = line
+                            print_colored(f"✏️ Updated Line {line_index+1}: {line[:50]}...", Fore.CYAN)
+                            line_index += 1
+                        else:
+                            edited_lines.append(line)
+                            print_colored(f"➕ NEW Line {line_index+1}: {line[:50]}...", Fore.YELLOW)
+                            line_index += 1
+
+            result = '\n'.join(edited_lines)
+            undo_history[filepath] = current_content   # Store undo
+            editor_chat_history.append({"role": "assistant", "content": result})
+
+            if is_diff_on:
+                display_diff(current_content, result)  # Show final diff if it's on
+
+            # Write the changes to the file only after the entire editing process
+            if write_file_content(filepath, result):
+                print_colored(f"✅ {filepath} successfully edited and saved!", Fore.GREEN)
+            else:
+                print_colored(f"❌ Failed to save changes to {filepath}", Fore.RED)
+
+            print_colored("=" * 50, Fore.MAGENTA)
+        except Exception as e:
+            print_colored(f"❌ Error editing {filepath}: {e}", Fore.RED)
+
+    return default_chat_history, editor_chat_history
+
+async def handle_new_command(default_chat_history, editor_chat_history, filepaths):
+    if not filepaths:
+        print_colored("❌ No file paths provided.", Fore.RED)
+        return default_chat_history, editor_chat_history
+
+    print_colored(f"🆕 Creating new files: {', '.join(filepaths)}", Fore.BLUE)
+    created_files = []
+    for filepath in filepaths:
+        file_ext = os.path.splitext(filepath)[1][1:]
+        template = file_templates.get(file_ext, "")
+        try:
+            with open(filepath, 'x') as f:
+                f.write(template)
+            print_colored(f"✅ Created {filepath} with template", Fore.GREEN)
+            created_files.append(filepath)
+        except FileExistsError:
+            print_colored(f"⚠️ {filepath} already exists. It will be edited, not overwritten.", Fore.YELLOW)
+            created_files.append(filepath)
+        except IOError as e:
+            print_colored(f"❌ Could not create {filepath}: {e}", Fore.RED)
+
+    if created_files:
+        user_input = (await get_input_async(f"Do you want to edit the newly created files? (y/n):")).lower()
+        if user_input == 'y':
+            default_chat_history, editor_chat_history = await handle_edit_command(
+                default_chat_history, editor_chat_history, created_files
+            )
+
+    return default_chat_history, editor_chat_history
+
+async def handle_clear_command():
+    global added_files, stored_searches, stored_images
+    cleared_something = False
+
+    if added_files:
+        added_files.clear()
+        cleared_something = True
+        print_colored("✅ Cleared memory of added files.", Fore.GREEN)
+
+    if stored_searches:
+        stored_searches.clear()
+        cleared_something = True
+        print_colored("✅ Cleared stored searches.", Fore.GREEN)
+
+    if stored_images:
+        image_count = len(stored_images)
+        stored_images.clear()
+        cleared_something = True
+        print_colored(f"✅ Cleared {image_count} images from memory.", Fore.GREEN)
+
+    if not cleared_something:
+        print_colored("ℹ️ No files, searches or images in memory to clear.", Fore.YELLOW)
+
+async def handle_reset_command(default_chat_history, editor_chat_history):
+    """Clears all chat history and added files memory."""
+    global added_files, stored_searches, stored_images
+    default_chat_history.clear()
+    editor_chat_history.clear()
+    added_files.clear()
+    stored_searches.clear()
+    stored_images.clear()
+
+    # Re-initialize:
+    default_chat_history = [{"role": "system", "content": SYSTEM_PROMPT}]
+    editor_chat_history = [{"role": "system", "content": EDITOR_PROMPT}]
+
+    print_colored(
+        "✅ All chat history, memory of added files, stored searches, and images have been reset.",
+        Fore.GREEN,
+    )
+
+    return default_chat_history, editor_chat_history  # Return the resetted histories
+
+def toggle_diff():
+    global is_diff_on
+    is_diff_on = not is_diff_on
+    status = "on" if is_diff_on else "off"
+    print_colored(
+        f"Diff is now {status} 🚀" if is_diff_on else f"Diff is now {status} 🚫",
+        Fore.YELLOW,
+    )
+
+def handle_history_command(chat_history):
+    print_colored("\n📜 Chat History:", Fore.BLUE)
+    for idx, message in enumerate(chat_history[1:], 1):  # Skip system message
+        role = message['role'].capitalize()
+        content = message['content'][:100] + "..." if len(message['content']) > 100 else message['content']
+        print_colored(f"{idx}. {role}: {content}", Fore.CYAN)
+
+async def handle_save_command(chat_history):
+    filename = await get_input_async("Enter filename to save chat history:")
+    try:
+        with open(filename, 'w') as f:
+            json.dump(chat_history, f)
+        print_colored(f"✅ Chat history saved to {filename}", Fore.GREEN)
+    except IOError as e:
+        print_colored(f"❌ Error saving chat history: {e}", Fore.RED)
+
+async def handle_load_command():
+    filename = await get_input_async("Enter filename to load chat history:")
+    try:
+        with open(filename, 'r') as f:
+            loaded_history = json.load(f)
+        print_colored(f"✅ Chat history loaded from {filename}", Fore.GREEN)
+        return loaded_history
+    except IOError as e:
+        print_colored(f"❌ Error loading chat history: {e}", Fore.RED)
+        return None
+
+async def handle_undo_command(filepath):
+    if not filepath:
+        print_colored("❌ No filepath provided for undo operation.", Fore.RED)
+        return
+    if filepath in undo_history:
+        content = undo_history[filepath]
+        if write_file_content(filepath, content):
+            print_colored(f"✅ Undid last edit for {filepath}", Fore.GREEN)
+            del undo_history[filepath]  # Remove the used undo history
+        else:
+            print_colored(f"❌ Failed to undo edit for {filepath}", Fore.RED)
+    else:
+        print_colored(f"❌ No undo history for {filepath}", Fore.RED)
