@@ -30,7 +30,7 @@ init(autoreset=True)
 load_dotenv()
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
+    api_key=os.getenv("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"),
 )
 
 DEFAULT_MODEL = "openai/o1-mini-2024-09-12"
@@ -248,7 +248,7 @@ def write_file_content(filepath, content):
         return True
     except IOError:
         return False
-    
+
 def is_text_file(file_path, sample_size=8192, text_characters=set(bytes(range(32,127)) + b'\n\r\t\b')):
     """Determine whether a file is text or binary."""
     try:
@@ -519,3 +519,228 @@ async def handle_undo_command(filepath):
             print_colored(f"❌ Failed to undo edit for {filepath}", Fore.RED)
     else:
         print_colored(f"❌ No undo history for {filepath}", Fore.RED)
+
+def syntax_highlight(code, language):
+    lexer = get_lexer_by_name(language)
+    return highlight(code, lexer, TerminalFormatter())
+
+def print_welcome_message():
+    print_colored(
+        "🔮 Welcome to the Assistant Developer Console! 🔮", Fore.MAGENTA, Style.BRIGHT
+    )
+
+    console = Console()
+    table = Table()
+
+    table.add_column("Command", style="cyan", no_wrap=True)
+    table.add_column("Description")
+
+    table.add_row("/add", "Add files to AI's knowledge base")
+    table.add_row("/edit", "Edit existing files")
+    table.add_row("/new", "Create new files")
+    table.add_row("/search", "Perform a DuckDuckGo search")
+    table.add_row("/image", "Add image(s) to AI's knowledge base")
+    table.add_row("/clear", "Clear added files, searches, and images from AI's memory")
+    table.add_row("/reset", "Reset entire chat and file memory")
+    table.add_row("/diff", "Toggle display of diffs")
+    table.add_row("/history", "View chat history")
+    table.add_row("/save", "Save chat history to a file")
+    table.add_row("/load", "Load chat history from a file")
+    table.add_row("/undo", "Undo last edit for a specific file")
+    table.add_row("/help", "Show this help message")
+    table.add_row("/model", "Show current AI model")
+    table.add_row("/change_model", "Change the AI model")
+    table.add_row("/show", "Show content of a file")
+    table.add_row("exit", "Exit the application")
+
+    console.print(table)
+
+    print_colored(
+        "For any other input, the AI will respond to your query or command.",
+        Fore.YELLOW,
+    )
+    print_colored(
+        "Use '<command> help' for more information on a specific command.",
+        Fore.YELLOW,
+    )
+
+def print_files_and_searches_in_memory():
+    if added_files:
+        file_list = ', '.join(added_files)
+        print_colored(
+            f"📂 Files currently in memory: {file_list}", Fore.CYAN, Style.BRIGHT
+        )
+    if stored_searches:
+        search_list = ', '.join(stored_searches.keys())
+        print_colored(
+            f"🔍 Searches currently in memory: {search_list}", Fore.CYAN, Style.BRIGHT
+        )
+
+def display_diff(original, edited):
+    diff = difflib.unified_diff(
+        original.splitlines(), edited.splitlines(), lineterm='', n=0
+    )
+    for line in diff:
+        if line.startswith('+'):
+            print_colored(line, Fore.GREEN)
+        elif line.startswith('-'):
+            print_colored(line, Fore.RED)
+        else:
+            print_colored(line, Fore.BLUE)
+
+async def handle_search_command(default_chat_history):
+    search_query = await get_input_async("What would you like to search?")
+    if not search_query.strip():
+        print_colored("❌ Empty search query. Please provide a search term.", Fore.RED)
+        return default_chat_history
+
+    print_colored(f"\n🔍 Searching for: {search_query}", Fore.BLUE)
+
+    try:
+        results = await aget_results(search_query)
+        search_name = search_query[:10].strip()  # Truncate to first 10 characters
+        stored_searches[search_name] = results
+        print_colored(f"✅ Search results for '{search_name}' stored in memory.", Fore.GREEN)
+
+        # Add search results to chat history
+        search_content = f"Search results for '{search_query}':\n"
+        for idx, result in enumerate(results[:8], 1):  # Limit to first 5 results for brevity
+            search_content += f"{idx}. {result['title']}: {result['body'][:100]}...\n"
+        default_chat_history.append({"role": "user", "content": search_content})
+
+    except Exception as e:
+        print_colored(f"❌ Error performing search: {e}", Fore.RED)
+
+    return default_chat_history
+
+async def handle_help_command():
+    print_welcome_message()
+
+def show_current_model():
+    print_colored(f"Current model: {DEFAULT_MODEL}", Fore.CYAN)
+
+async def change_model():
+    global DEFAULT_MODEL
+    new_model = await get_input_async("Enter the new model name: ")
+    DEFAULT_MODEL = new_model
+    print_colored(f"Model changed to: {DEFAULT_MODEL}", Fore.GREEN)
+
+async def show_file_content(filepath):
+    content = read_file_content(filepath)
+    if content.startswith("❌"):
+        print_colored(content, Fore.RED)
+    else:
+        print_colored(f"Content of {filepath}:", Fore.CYAN)
+        print(content)
+
+async def main():
+    default_chat_history = [{"role": "system", "content": SYSTEM_PROMPT}]
+    editor_chat_history = [{"role": "system", "content": EDITOR_PROMPT}]
+    clear_console()
+    print_welcome_message()
+    print_files_and_searches_in_memory()
+
+    while True:
+        try:
+            prompt = await get_input_async(f"\n\nYou:")
+
+            print_files_and_searches_in_memory()
+
+            if prompt.lower() == "exit":
+                print_colored(
+                    "Thank you for using the OpenAI Developer Console. Goodbye!", Fore.MAGENTA
+                )
+                break
+
+            if prompt.startswith("/add "):
+                filepaths = prompt.split("/add ", 1)[1].strip().split()
+                default_chat_history = await handle_add_command(default_chat_history, *filepaths)
+                continue
+
+            if prompt.startswith("/edit "):
+                filepaths = prompt.split("/edit ", 1)[1].strip().split()
+                default_chat_history, editor_chat_history = await handle_edit_command(
+                    default_chat_history, editor_chat_history, filepaths
+                )
+                continue
+
+            if prompt.startswith("/new "):
+                filepaths = prompt.split("/new ", 1)[1].strip().split()
+                default_chat_history, editor_chat_history = await handle_new_command(
+                    default_chat_history, editor_chat_history, filepaths
+                )
+                continue
+
+            if prompt.startswith("/search"):
+                default_chat_history = await handle_search_command(default_chat_history)
+                continue
+
+            if prompt.startswith("/clear"):
+                await handle_clear_command()
+                continue
+
+            if prompt.startswith("/reset"):
+                default_chat_history, editor_chat_history = await handle_reset_command(
+                    default_chat_history, editor_chat_history
+                )
+                continue
+
+            if prompt.startswith("/diff"):
+                toggle_diff()
+                continue
+
+            if prompt.startswith("/history"):
+                handle_history_command(default_chat_history)
+                continue
+
+            if prompt.startswith("/save"):
+                await handle_save_command(default_chat_history)
+                continue
+
+            if prompt.startswith("/image "):
+                image_paths = prompt.split("/image ", 1)[1].strip().split()
+                default_chat_history = await handle_image_command(image_paths, default_chat_history)
+                continue
+
+            if prompt.startswith("/load"):
+                loaded_history = await handle_load_command()
+                if loaded_history:
+                    default_chat_history = loaded_history
+                continue
+
+            if prompt.startswith("/undo "):
+                filepath = prompt.split("/undo ", 1)[1].strip()
+                await handle_undo_command(filepath)
+                continue
+
+            if prompt.startswith("/help"):
+                await handle_help_command()
+                continue
+
+            if prompt.startswith("/model"):
+                show_current_model()
+                continue
+
+            if prompt.startswith("/change_model"):
+                await change_model()
+                continue
+
+            if prompt.startswith("/show "):
+                filepath = prompt.split("/show ", 1)[1].strip()
+                await show_file_content(filepath)
+                continue
+
+            print_colored("\n🤖 Assistant:", Fore.BLUE)
+            try:
+                default_chat_history.append({"role": "user", "content": prompt})
+                response = get_streaming_response(default_chat_history, DEFAULT_MODEL)
+                default_chat_history.append({"role": "assistant", "content": response})
+            except Exception as e:
+                print_colored(f"Error: {e}. Please try again.", Fore.RED)
+
+        except Exception as e:
+            print_colored(f"An error occurred: {e}", Fore.RED)
+            continue
+
+if __name__ == "__main__":
+    asyncio.run(main())
